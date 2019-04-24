@@ -80,7 +80,9 @@ class Attention(nn.Module):
         att1 = self.encoder_att(encoder_out)  # (batch_size, num_pixels, attention_dim)
         att2 = self.decoder_att(decoder_hidden)  # (batch_size, attention_dim)
         att = self.full_att(self.relu(att1 + att2.unsqueeze(1))).squeeze(2)  # (batch_size, num_pixels)
-        alpha = self.softmax(att)  # (batch_size, num_pixels)
+            #  TODO: test different attention weight calculation in P52, https://arxiv.org/pdf/1703.01619.pdf
+            # NOTE: https://github.com/sgrvinod/a-PyTorch-Tutorial-to-Image-Captioning/issues/27#issuecomment-447646581
+        alpha = self.softmax(att)  # (batch_size, num_pixels) We will use soft Attention, where the weights of the pixels add up to 1.
         attention_weighted_encoding = (encoder_out * alpha.unsqueeze(2)).sum(dim=1)  # (batch_size, encoder_dim)
 
         return attention_weighted_encoding, alpha
@@ -172,7 +174,7 @@ class DecoderWithAttention(nn.Module):
         encoder_dim = encoder_out.size(-1)
         vocab_size = self.vocab_size
 
-        # Flatten image
+        # Flatten image e.g. 14 * 14 -> 196
         encoder_out = encoder_out.view(batch_size, -1, encoder_dim)  # (batch_size, num_pixels, encoder_dim)
         num_pixels = encoder_out.size(1)
 
@@ -201,7 +203,7 @@ class DecoderWithAttention(nn.Module):
         for t in range(max(decode_lengths)):
             batch_size_t = sum([l > t for l in decode_lengths])
             attention_weighted_encoding, alpha = self.attention(encoder_out[:batch_size_t],
-                                                                h[:batch_size_t])
+                                                                h[:batch_size_t]) # equation (4) and (5)
             gate = self.sigmoid(self.f_beta(h[:batch_size_t]))  # gating scalar, (batch_size_t, encoder_dim)
             attention_weighted_encoding = gate * attention_weighted_encoding
             h, c = self.decode_step(

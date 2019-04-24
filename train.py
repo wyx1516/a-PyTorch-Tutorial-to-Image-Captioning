@@ -1,3 +1,4 @@
+import json
 import time
 import torch.backends.cudnn as cudnn
 import torch.optim
@@ -10,9 +11,11 @@ from datasets import *
 from utils import *
 from nltk.translate.bleu_score import corpus_bleu
 
-# Data parameters
-data_folder = '/media/ssd/caption data'  # folder with data files saved by create_input_files.py
-data_name = 'coco_5_cap_per_img_5_min_word_freq'  # base name shared by data files
+from macro import OUTPUT_FOLDER, BASE_NAME
+
+# Data parameters TODO: change to argument parser instead ....
+data_folder = OUTPUT_FOLDER  # folder with data files saved by create_input_files.py
+data_name = BASE_NAME  # ''coco_5_cap_per_img_5_min_word_freq'  # base name shared by data files
 
 # Model parameters
 emb_dim = 512  # dimension of word embeddings
@@ -29,13 +32,13 @@ epochs_since_improvement = 0  # keeps track of number of epochs since there's be
 batch_size = 32
 workers = 1  # for data-loading; right now, only 1 works with h5py
 encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
-decoder_lr = 4e-4  # learning rate for decoder
+decoder_lr = 4e-4  # learning rate for decoder (TODO: why different ... ;<)
 grad_clip = 5.  # clip gradients at an absolute value of
 alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as in the paper
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
-checkpoint = None  # path to checkpoint, None if none
+checkpoint = None  # path to checkpoint, None if none. (if start from some checkpoint)
 
 
 def main():
@@ -45,7 +48,7 @@ def main():
 
     global best_bleu4, epochs_since_improvement, checkpoint, start_epoch, fine_tune_encoder, data_name, word_map
 
-    # Read word map
+    # Read word map (w2i)
     word_map_file = os.path.join(data_folder, 'WORDMAP_' + data_name + '.json')
     with open(word_map_file, 'r') as j:
         word_map = json.load(j)
@@ -85,7 +88,9 @@ def main():
     # Loss function
     criterion = nn.CrossEntropyLoss().to(device)
 
-    # Custom dataloaders
+    # Custom dataloaders (This page details the preprocessing or transformation we need to perform –
+    # pixel values must be in the range [0,1] and we must then normalize the image by the mean and standard
+    # deviation of the ImageNet images' RGB channels.)
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
     train_loader = torch.utils.data.DataLoader(
@@ -95,8 +100,12 @@ def main():
         CaptionDataset(data_folder, data_name, 'VAL', transform=transforms.Compose([normalize])),
         batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True)
 
+    initial_time = time.time()
+    print("Initial time", initial_time)
+
     # Epochs
     for epoch in range(start_epoch, epochs):
+        print("Starting epoch ", epoch)
 
         # Decay learning rate if there is no improvement for 8 consecutive epochs, and terminate training after 20
         if epochs_since_improvement == 20:
@@ -113,7 +122,7 @@ def main():
               criterion=criterion,
               encoder_optimizer=encoder_optimizer,
               decoder_optimizer=decoder_optimizer,
-              epoch=epoch)
+              epoch=epoch,initial_time=initial_time)
 
         # One epoch's validation
         recent_bleu4 = validate(val_loader=val_loader,
@@ -135,7 +144,7 @@ def main():
                         decoder_optimizer, recent_bleu4, is_best)
 
 
-def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_optimizer, epoch):
+def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_optimizer, epoch, initial_time):
     """
     Performs one epoch's training.
 
@@ -154,7 +163,7 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
     batch_time = AverageMeter()  # forward prop. + back prop. time
     data_time = AverageMeter()  # data loading time
     losses = AverageMeter()  # loss (per word decoded)
-    top5accs = AverageMeter()  # top5 accuracy
+    top5accs = AverageMeter()  # top5 accuracy, BLEU??
 
     start = time.time()
 
@@ -162,22 +171,22 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
     for i, (imgs, caps, caplens) in enumerate(train_loader):
         data_time.update(time.time() - start)
 
-        # Move to GPU, if available
+        # Matrix value, Move to GPU, if available
         imgs = imgs.to(device)
         caps = caps.to(device)
         caplens = caplens.to(device)
 
-        # Forward prop.
+        # Forward prop. (TODO: read and make through)
         imgs = encoder(imgs)
         scores, caps_sorted, decode_lengths, alphas, sort_ind = decoder(imgs, caps, caplens)
 
         # Since we decoded starting with <start>, the targets are all words after <start>, up to <end>
         targets = caps_sorted[:, 1:]
 
-        # Remove timesteps that we didn't decode at, or are pads
+        # Remove timesteps that we didn't decode at, or are pads (word_idx = 0)
         # pack_padded_sequence is an easy trick to do this
         scores, _ = pack_padded_sequence(scores, decode_lengths, batch_first=True)
-        targets, _ = pack_padded_sequence(targets, decode_lengths, batch_first=True)
+        targets, _ = pack_padded_sequence(targets, decode_lengths, batch_first=True)  # groundtruth in word idx
 
         # Calculate loss
         loss = criterion(scores, targets)
@@ -216,10 +225,11 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
                   'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data Load Time {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Top-5 Accuracy {top5.val:.3f} ({top5.avg:.3f})'.format(epoch, i, len(train_loader),
+                  'Top-5 Accuracy {top5.val:.3f} ({top5.avg:.3f})\t'
+                  'Time elapsed {elapse:.1f} mins'.format(epoch, i, len(train_loader),
                                                                           batch_time=batch_time,
                                                                           data_time=data_time, loss=losses,
-                                                                          top5=top5accs))
+                                                                          top5=top5accs,elapse=(time.time()-initial_time)/60))
 
 
 def validate(val_loader, encoder, decoder, criterion):
@@ -249,7 +259,8 @@ def validate(val_loader, encoder, decoder, criterion):
     # solves the issue #57
     with torch.no_grad():
         # Batches
-        for i, (imgs, caps, caplens, allcaps) in enumerate(val_loader):
+        for i, (imgs, caps, caplens, allcaps) in enumerate(
+                val_loader):  # For validation or testing, also return all 'captions_per_image' captions to find BLEU-4 score
 
             # Move to device, if available
             imgs = imgs.to(device)
@@ -288,7 +299,8 @@ def validate(val_loader, encoder, decoder, criterion):
                 print('Validation: [{0}/{1}]\t'
                       'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                      'Top-5 Accuracy {top5.val:.3f} ({top5.avg:.3f})\t'.format(i, len(val_loader), batch_time=batch_time,
+                      'Top-5 Accuracy {top5.val:.3f} ({top5.avg:.3f})\t'.format(i, len(val_loader),
+                                                                                batch_time=batch_time,
                                                                                 loss=losses, top5=top5accs))
 
             # Store references (true captions), and hypothesis (prediction) for each image

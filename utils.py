@@ -67,7 +67,7 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
     assert len(val_image_paths) == len(val_image_captions)
     assert len(test_image_paths) == len(test_image_captions)
 
-    # Create word map
+    # Create word map, TODO: original show-tell-attend paper used a fixed vocabulary size of 10,000, also exlcuding valid and test
     words = [w for w in word_freq.keys() if word_freq[w] > min_word_freq]
     word_map = {k: v + 1 for v, k in enumerate(words)}
     word_map['<unk>'] = len(word_map) + 1
@@ -163,6 +163,8 @@ def load_embeddings(emb_file, word_map):
     :param emb_file: file containing embeddings (stored in GloVe format)
     :param word_map: word map
     :return: embeddings in the same order as the words in the word map, dimension of embeddings
+
+    TODO: maybe switch to pre-trained embedding
     """
 
     # Find embedding dimension
@@ -227,7 +229,7 @@ def save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder
              'decoder': decoder,
              'encoder_optimizer': encoder_optimizer,
              'decoder_optimizer': decoder_optimizer}
-    filename = 'checkpoint_' + data_name + '.pth.tar'
+    filename = 'model/checkpoint_' + data_name + '.pth.tar'
     torch.save(state, filename)
     # If this checkpoint is the best so far, store a copy so it doesn't get overwritten by a worse checkpoint
     if is_best:
@@ -249,7 +251,7 @@ class AverageMeter(object):
         self.count = 0
 
     def update(self, val, n=1):
-        self.val = val
+        self.val = val  # current metric val
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count

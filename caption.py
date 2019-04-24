@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import numpy as np
 import json
 import torchvision.transforms as transforms
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # need pythonw
 import matplotlib.cm as cm
 import skimage.transform
 import argparse
